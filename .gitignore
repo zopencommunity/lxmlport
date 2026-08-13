@@ -1,7 +1,6 @@
-lxml/
+log/
+log.DEV/
+log.STABLE/
 build/
-dist/
-*.pyc
-__pycache__/
-log.*/
 install/
+.zoslib_hooks/

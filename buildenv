@@ -26,7 +26,13 @@ export ZOPEN_DEV_URL="https://github.com/lxml/lxml.git"
 # broken libxml2 rather than a missing dependency.
 export ZOPEN_STABLE_DEPS="check_python libxml2 libxslt zlib libiconv zoslib"
 export ZOPEN_DEV_DEPS="check_python libxml2 libxslt zlib libiconv zoslib"
-export ZOPEN_RUNTIME_DEPS="check_python libxml2 libxslt zlib libiconv zoslib"
+# Build-time only. zopen ships libxml2, libxslt, zlib and libiconv as archives
+# with no shared object at all, and although zoslib offers both, the binder
+# took the archive -- verified by importing the built extension with
+# LIBPATH=/lib:/usr/lib and nothing from zopen on the path. Everything is
+# compiled in, so listing these as runtime dependencies would make
+# "zopen install lxml" pull five ports that are never loaded.
+export ZOPEN_RUNTIME_DEPS="check_python"
 export ZOPEN_CATEGORIES="development library"
 
 export ZOPEN_BUILD_SYSTEM="Python"

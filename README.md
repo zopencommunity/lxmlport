@@ -1,28 +1,33 @@
-# lxmlport
+[![Automatic version updates](https://github.com/zopencommunity/lxmlport/actions/workflows/bump.yml/badge.svg)](https://github.com/ZOSOpenTools/lxmlport/actions/workflows/bump.yml)
 
-z/OS port of [lxml](https://lxml.de/) — XML and XSLT processing for Python.
+# lxml
 
-Unlike the recent Rust-backed Python ports, lxml is **compiled on z/OS**. It is
-a C extension over `libxml2` and `libxslt`, both of which zopen already
-provides, so there is no cross-compile step and no prebuilt wheel: the standard
-zopen Python build system compiles it once per interpreter (3.12, 3.13, 3.14).
+XML and XSLT processing for Python, built on libxml2 and libxslt.
 
-## Dependencies
+# Installation and Usage
 
-`libxml2` and `libxslt` are the libraries being wrapped. `zlib`, `libiconv` and
-`zoslib` are needed because zopen ships static archives — anything linking
-libxml2 must also name what libxml2 itself depends on, or the bind fails with
-unresolved `__open_ascii`, `libiconv_open` and similar.
-
-## Install
-
-```sh
+Use the zopen package manager ([QuickStart Guide](https://zopen.community/#/Guides/QuickStart)) to install:
+```bash
 zopen install lxml
 ```
 
-Or from the wheel index:
+# Building from Source
 
-```sh
+1. Clone the repository:
+```bash
+git clone https://github.com/zopencommunity/lxmlport.git
+cd lxmlport
+```
+2. Build using zopen:
+```bash
+zopen build -vv
+```
+
+See the [zopen porting guide](https://zopen.community/#/Guides/Porting) for more details.
+
+Or from the zopen wheel index:
+
+```bash
 export PIP_EXTRA_INDEX_URL="https://repo.zopen.community/pypi/wheels/simple/"
 export PIP_CONSTRAINT="https://repo.zopen.community/pulp/content/constraints/zopen-constraints.txt"
 python3 -m venv --system-site-packages .venv && . .venv/bin/activate
@@ -31,3 +36,26 @@ pip install lxml
 
 `--system-site-packages` matters on z/OS: several packages the interpreters
 bundle cannot be installed from PyPI, and a plain venv hides them.
+
+# Documentation
+
+Upstream documentation is at [lxml.de](https://lxml.de/).
+
+Unlike the recent Rust-backed Python ports, lxml is **compiled on z/OS**. It is
+a C extension over `libxml2` and `libxslt`, both already in the zopen catalog,
+so there is no cross-compile step and no prebuilt wheel: the port is built once
+per interpreter (3.12, 3.13 and 3.14).
+
+# Troubleshooting
+
+`zlib`, `libiconv` and `zoslib` are dependencies even though lxml never calls
+into them. zopen ships static archives, so anything linking `libxml2` must also
+name what `libxml2` itself depends on. Omitting them fails at bind time with
+unresolved `__open_ascii`, `libiconv_open` and similar, which reads like a
+broken `libxml2` rather than a missing dependency.
+
+The link flags come from `xml2-config` and `xslt-config` rather than being
+written into the buildenv, so they stay correct when a dependency is rebuilt.
+
+# Contributing
+Contributions are welcome! Please follow the [zopen contribution guidelines](https://github.com/zopencommunity/meta/blob/main/CONTRIBUTING.md).
