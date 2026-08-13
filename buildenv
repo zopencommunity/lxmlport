@@ -1,0 +1,188 @@
+# bump: lxml-version /LXML_VERSION="(.*)"/ https://github.com/lxml/lxml.git|semver:*
+LXML_VERSION="6.1.1"
+
+###
+### Build control file for the lxml port
+###
+### Unlike the other Python ports added recently, this one is compiled on z/OS.
+### lxml is a C extension over libxml2 and libxslt, both of which zopen already
+### provides, so there is no cross-compile step and no prebuilt wheel: the
+### standard Python build system compiles it once per interpreter.
+###
+### Upstream tags are "lxml-<version>", not "v<version>".
+###
+
+export ZOPEN_PROJECT_NAME="lxml"
+export ZOPEN_BUILD_LINE="STABLE"
+export ZOPEN_STABLE_URL="https://github.com/lxml/lxml.git"
+export ZOPEN_STABLE_TAG="lxml-${LXML_VERSION}"
+export ZOPEN_DEV_URL="https://github.com/lxml/lxml.git"
+
+# libxml2 and libxslt are the libraries being wrapped. zlib, libiconv and
+# zoslib are not used by lxml directly -- they are what libxml2 itself pulls in
+# on z/OS, and because zopen ships static archives they have to be on the link
+# line of anything that links libxml2. Leaving them out produces unresolved
+# __open_ascii, libiconv_open and similar at bind time, which reads like a
+# broken libxml2 rather than a missing dependency.
+export ZOPEN_STABLE_DEPS="check_python libxml2 libxslt zlib libiconv zoslib"
+export ZOPEN_DEV_DEPS="check_python libxml2 libxslt zlib libiconv zoslib"
+export ZOPEN_RUNTIME_DEPS="check_python libxml2 libxslt zlib libiconv zoslib"
+export ZOPEN_CATEGORIES="development library"
+
+export ZOPEN_BUILD_SYSTEM="Python"
+
+zopen_get_version() {
+  echo "${LXML_VERSION}"
+}
+
+# lxml's setup.py knows it needs -lxml2 -lxslt -lexslt -lz -lm, but it does not
+# know what those libraries need in turn. On z/OS libxml2 is a static archive
+# linked against zoslib and libiconv, so those have to be named too.
+#
+# Take the flags from xml2-config and xslt-config rather than writing paths
+# here: they are installed by the zopen ports themselves, so they stay correct
+# when a dependency moves or is rebuilt. Order matters -- xslt before xml2, so
+# the archive that depends on the other is seen first.
+#
+# This runs as zopen_pre_build rather than zopen_init on purpose. zopen-build
+# supplies a default zopen_init for C-extension Python ports that merges LIBS
+# into LDFLAGS, and defining our own would silently replace it.
+zopen_pre_build() {
+  if ! command -v xml2-config > /dev/null 2>&1; then
+    printError "xml2-config not on PATH; the libxml2 dependency did not set up"
+    return 1
+  fi
+  if ! command -v xslt-config > /dev/null 2>&1; then
+    printError "xslt-config not on PATH; the libxslt dependency did not set up"
+    return 1
+  fi
+
+  export CFLAGS="$(xml2-config --cflags) $(xslt-config --cflags) ${CFLAGS}"
+  export LDFLAGS="$(xslt-config --libs) $(xml2-config --libs) ${LDFLAGS}"
+
+  printInfo "Building against libxml2 $(xml2-config --version), libxslt $(xslt-config --version)"
+}
+
+# Run once per interpreter with that interpreter's environment active and the
+# freshly built wheel installed. lxml is compiled here rather than
+# cross-compiled, so the risk is not "does the binary load" but "did it link
+# against a usable libxml2/libxslt" -- hence real parsing, XPath and a
+# transform rather than an import check.
+zopen_python_test() {
+  LXML_EXPECTED_VERSION="${LXML_VERSION}" python - <<'PYEOF'
+import os
+import sys
+
+# The check exercises the installed wheel. python reads this script from stdin
+# and so puts "" first on sys.path, and the build directory holds an lxml
+# source tree -- without this, "import lxml" finds src/lxml, which has no
+# compiled extension.
+sys.path = [p for p in sys.path if p not in ("", ".")]
+
+failures = 0
+total = 0
+
+
+def check(label, fn):
+    global failures, total
+    total += 1
+    try:
+        if fn():
+            print("PASS:", label)
+        else:
+            print("FAIL:", label, file=sys.stderr)
+            failures += 1
+    except Exception as exc:
+        print("FAIL:", label, "-", exc, file=sys.stderr)
+        failures += 1
+
+
+try:
+    from lxml import etree
+except ImportError as exc:
+    # Report rather than crash, so zopen_check_results sees a count instead of
+    # an empty log.
+    print("FAIL: import lxml.etree -", exc, file=sys.stderr)
+    print("lxml FAILED to import on Python %s" % sys.version.split()[0])
+    sys.exit(1)
+
+expected = os.environ["LXML_EXPECTED_VERSION"]
+check("version is the one this port builds",
+      lambda: etree.__version__ == expected)
+
+doc = etree.fromstring(b'<a><b n="1">hi</b><b n="2">there</b></a>')
+check("parse and findall", lambda: [b.text for b in doc.findall("b")] == ["hi", "there"])
+check("xpath predicate", lambda: doc.xpath('//b[@n="2"]/text()') == ["there"])
+
+ns = etree.fromstring(b'<r xmlns:x="http://example.com/x"><x:v>7</x:v></r>')
+check("namespaces",
+      lambda: ns.xpath("//x:v/text()", namespaces={"x": "http://example.com/x"}) == ["7"])
+
+
+def transform():
+    sheet = etree.XML(
+        b'<xsl:stylesheet version="1.0"'
+        b' xmlns:xsl="http://www.w3.org/1999/XSL/Transform">'
+        b'<xsl:template match="/"><out><xsl:value-of select="//b[1]"/></out>'
+        b"</xsl:template></xsl:stylesheet>")
+    return "hi" in str(etree.XSLT(sheet)(doc))
+
+
+# XSLT is the reason libxslt is a dependency; an lxml that linked only libxml2
+# still imports and parses, and only fails here.
+check("XSLT transform", transform)
+
+
+def rejects_malformed():
+    try:
+        etree.fromstring(b"<a><b></a>")
+        return False
+    except etree.XMLSyntaxError:
+        return True
+
+
+check("malformed XML rejected", rejects_malformed)
+
+html = etree.HTML(b"<html><body><p>one<p>two</body></html>")
+check("HTML parser recovers", lambda: len(html.xpath("//p")) == 2)
+
+print()
+print("lxml %s on Python %s (libxml2 %s, libxslt %s)  --  %d passed, %d failed" % (
+    etree.__version__, sys.version.split()[0],
+    ".".join(str(n) for n in etree.LIBXML_VERSION),
+    ".".join(str(n) for n in etree.LIBXSLT_VERSION),
+    total - failures, failures))
+sys.exit(1 if failures else 0)
+PYEOF
+}
+
+zopen_check_results() {
+  dir="$1"; pfx="$2"; chk="${dir}/${pfx}_check.log"
+  # No "|| echo 0": grep -c already prints 0 when nothing matches and also exits
+  # 1, so the fallback appends a second zero and the arithmetic below dies with
+  # FSUM9224 "bad number" -- on clean runs specifically.
+  passed=$(grep -c "^PASS:" "${chk}" 2>/dev/null)
+  failed=$(grep -c "^FAIL:" "${chk}" 2>/dev/null)
+  passed=${passed:-0}
+  failed=${failed:-0}
+  total=$((passed + failed))
+
+  # An interpreter that printed nothing did not pass, it never ran. Reporting
+  # 0 of 0 as success is how a broken build ships.
+  interpreters=$(grep -c "^lxml .* on Python" "${chk}" 2>/dev/null)
+  interpreters=${interpreters:-0}
+  expected=$(echo "${ZOPEN_PYTHON_VERSIONS:-3.12 3.13 3.14}" | wc -w | tr -d ' ')
+  if [ "${interpreters}" -lt "${expected}" ]; then
+    silent=$((expected - interpreters))
+    failed=$((failed + silent))
+    total=$((total + silent))
+  fi
+
+  echo "actualFailures:${failed}"
+  echo "totalTests:${total}"
+  echo "expectedFailures:0"
+}
+
+zopen_append_to_validate_install() {
+  echo "python3 -c \"from lxml import etree; print('lxml', etree.__version__)\""
+}
