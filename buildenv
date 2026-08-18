@@ -1,5 +1,5 @@
 # bump: lxml-version /LXML_VERSION="(.*)"/ https://github.com/lxml/lxml.git|semver:*
-LXML_VERSION="6.1.1"
+LXML_VERSION="6.1.2"
 
 ###
 ### Build control file for the lxml port
